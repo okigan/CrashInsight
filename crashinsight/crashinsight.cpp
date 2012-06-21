@@ -7,6 +7,28 @@
 #include "dbgeng.h"
 #pragma comment(lib, "dbgeng.lib")
 
+#include <atlbase.h>
+
+#define RETONFAILED(x, __VARARGS__) if(FAILED(x = __VARARGS__)) return x;
+
+class CComInit
+{
+public:
+    CComInit()
+    {
+    }
+
+    HRESULT Init()
+    {
+        return CoInitialize(NULL);
+    }
+
+    ~CComInit()
+    {
+        CoUninitialize();
+    }
+};
+
 
 // http://blogs.msdn.com/b/joshpoley/archive/2008/05/27/opening-a-crash-dump-file-automating-crash-dump-analysis-part-1.aspx
 // http://blogs.msdn.com/b/joshpoley/archive/2008/06/23/automating-crash-dump-analysis-some-final-thoughts.aspx
@@ -75,12 +97,9 @@ HRESULT DumpEvent(IDebugControl *control, IDebugSymbols *symbols)
     }
 
     // get the fault information
-    hr = control->GetLastEventInformation(&type, &procID, &threadID,
+    RETONFAILED(hr, control->GetLastEventInformation(&type, &procID, &threadID,
         &extraInfo, sizeof(extraInfo), &extraInfoUsed, description,
-        ARRAYSIZE(description)-1, NULL);
-
-    if(FAILED(hr))
-        goto cleanup;
+        ARRAYSIZE(description)-1, NULL));
 
     printf("  Description:       %s\n", description);
 
@@ -104,8 +123,6 @@ HRESULT DumpEvent(IDebugControl *control, IDebugSymbols *symbols)
         }
     }
 
-cleanup:
-
     return hr;
 }
 
@@ -116,71 +133,37 @@ int _tmain(int argc, _TCHAR* argv[])
     char *crashPath = argv[1];
 
     HRESULT hr = E_FAIL;
-    IDebugClient *client = NULL;
-    IDebugControl *control = NULL;
-    IDebugSymbols *symbols = NULL;
+    CComPtr<IDebugClient> client;
+    CComPtr<IDebugControl> control;
+    CComPtr<IDebugSymbols> symbols;
+
+    CComInit ci;
 
     // Initialize COM
-    hr = CoInitialize(NULL);
-    if(FAILED(hr))
-        goto cleanup;
+    RETONFAILED(hr, ci.Init());
 
     // Create the base IDebugClient object
-    hr = DebugCreate(__uuidof(IDebugClient), (LPVOID*)&client);
-    if(FAILED(hr))
-        goto cleanup;
+    RETONFAILED(hr, DebugCreate(__uuidof(IDebugClient), (LPVOID*)&client));
 
     // from the base, create the Control and Symbols objects
-    hr = client->QueryInterface(__uuidof(IDebugControl), (LPVOID*)&control);
-    if(FAILED(hr))
-        goto cleanup;
+    RETONFAILED(hr, client->QueryInterface(__uuidof(IDebugControl), (LPVOID*)&control));
 
-    hr = client->QueryInterface(__uuidof(IDebugSymbols), (LPVOID*)&symbols);
-    if(FAILED(hr))
-        goto cleanup;
+    RETONFAILED(hr, client->QueryInterface(__uuidof(IDebugSymbols), (LPVOID*)&symbols));
 
-    // we can supplement the _NT_SYMBOL_PATH environment variable
-    // by adding a path here
-    symbols->SetSymbolPath(symbolPath);
+    // we can supplement the _NT_SYMBOL_PATH environment variable by adding a path here
+    RETONFAILED(hr, symbols->SetSymbolPath(symbolPath));
 
     // the debugger will need to look at the actual binaries
-    // so provide the path to the exsecutable files
-    symbols->SetImagePath(imagePath);
+    // so provide the path to the executable files
+    RETONFAILED(hr, symbols->SetImagePath(imagePath));
 
     // open the crash dump
-    hr = client->OpenDumpFile(crashPath);
-    if(FAILED(hr))
-        goto cleanup;
+    RETONFAILED(hr, client->OpenDumpFile(crashPath));
 
     // wait for the engine to finish processing
-    control->WaitForEvent(DEBUG_WAIT_DEFAULT, INFINITE);
+    RETONFAILED(hr, control->WaitForEvent(DEBUG_WAIT_DEFAULT, INFINITE));
 
-    hr = DumpEvent(control, symbols);
-    if(FAILED(hr))
-        goto cleanup;
+    RETONFAILED(hr, DumpEvent(control, symbols));
 
-
-cleanup:
-
-    // cleanup and destroy the objects
-    if(symbols)
-    {
-        symbols->Release();
-        symbols = NULL;
-    }
-    if(control)
-    {
-        control->Release();
-        control = NULL;
-    }
-    if(client)
-    {
-        client->Release();
-        client = NULL;
-    }
-
-    // cleanup COM
-    CoUninitialize();
-
-    return 0;
+    return hr;
 }
