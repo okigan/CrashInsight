@@ -71,19 +71,16 @@ HRESULT DumpEvent(IDebugControl *control, IDebugSymbols *symbols)
         // DEBUG_LAST_EVENT_INFO_xyz structs here
     };
 
-    HRESULT hr = S_OK;
-    ULONG type = 0;
-    ULONG procID = 0;
-    ULONG threadID = 0;
-    ExtraInfo extraInfo;
-    ULONG extraInfoUsed = 0;
+    HRESULT hr           = S_OK;
+    ULONG type           = 0;
+    ULONG procID         = 0;
+    ULONG threadID       = 0;
+    ExtraInfo extraInfo  = {};
+    ULONG extraInfoUsed  = 0;
     char description[80] = {0};
 
     ULONG bugCheckCode = 0;
     ULONG64 bugCheckArgs[4] = {0};
-
-    ZeroMemory(&extraInfo, sizeof(extraInfo));
-
 
     // look for Bug Check data
     hr = control->ReadBugCheckData(&bugCheckCode, &bugCheckArgs[0], &bugCheckArgs[1],
@@ -143,12 +140,12 @@ int _tmain(int argc, _TCHAR* argv[])
     RETONFAILED(hr, ci.Init());
 
     // Create the base IDebugClient object
-    RETONFAILED(hr, DebugCreate(__uuidof(IDebugClient), (LPVOID*)&client));
+    RETONFAILED(hr, DebugCreate(IID_IDebugClient, (LPVOID*)&client));
 
     // from the base, create the Control and Symbols objects
-    RETONFAILED(hr, client->QueryInterface(__uuidof(IDebugControl), (LPVOID*)&control));
+    RETONFAILED(hr, client.QueryInterface(&control));
 
-    RETONFAILED(hr, client->QueryInterface(__uuidof(IDebugSymbols), (LPVOID*)&symbols));
+    RETONFAILED(hr, client.QueryInterface(&symbols));
 
     // we can supplement the _NT_SYMBOL_PATH environment variable by adding a path here
     RETONFAILED(hr, symbols->SetSymbolPath(symbolPath));
