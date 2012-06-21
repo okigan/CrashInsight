@@ -10,3 +10,12 @@
 *.lai
 *.la
 *.a
+
+*/Debug/*
+*/Release/*
+*/ipch/*
+*/bin/*
+*/objs/*
+
+*.vcxproj.filters
+*.vcxproj.user
