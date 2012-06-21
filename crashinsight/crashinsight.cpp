@@ -4,7 +4,11 @@
 #include "stdafx.h"
 
 #include <windows.h>
+
+#define INITGUID
+#include <Guiddef.h>
 #include "dbgeng.h"
+
 #pragma comment(lib, "dbgeng.lib")
 
 #include <atlbase.h>
@@ -62,6 +66,27 @@ char const * const GetExceptionName(int i)
     return NULL;
 }
 
+HRESULT DumpBugCheck(IDebugControl *control, IDebugSymbols *symbols)
+{
+    HRESULT hr           = S_OK;
+
+    ULONG bugCheckCode = 0;
+    ULONG64 bugCheckArgs[4] = {0};
+
+    // look for Bug Check data
+    hr = control->ReadBugCheckData(&bugCheckCode, &bugCheckArgs[0], &bugCheckArgs[1],
+        &bugCheckArgs[2], &bugCheckArgs[3]);
+
+    if(SUCCEEDED(hr))
+    {
+        printf("  Bug Check:         %X (0x%08X, 0x%08X, 0x%08X, 0x%08X)\n",
+            bugCheckCode, bugCheckArgs[0], bugCheckArgs[1],
+            bugCheckArgs[2], bugCheckArgs[3]);
+    }
+
+    return hr;
+}
+
 HRESULT DumpEvent(IDebugControl *control, IDebugSymbols *symbols)
 {
     union ExtraInfo
@@ -79,20 +104,7 @@ HRESULT DumpEvent(IDebugControl *control, IDebugSymbols *symbols)
     ULONG extraInfoUsed  = 0;
     char description[80] = {0};
 
-    ULONG bugCheckCode = 0;
-    ULONG64 bugCheckArgs[4] = {0};
-
-    // look for Bug Check data
-    hr = control->ReadBugCheckData(&bugCheckCode, &bugCheckArgs[0], &bugCheckArgs[1],
-        &bugCheckArgs[2], &bugCheckArgs[3]);
-
-    if(SUCCEEDED(hr))
-    {
-        printf("  Bug Check:         %X (0x%08X, 0x%08X, 0x%08X, 0x%08X)\n",
-            bugCheckCode, bugCheckArgs[0], bugCheckArgs[1],
-            bugCheckArgs[2], bugCheckArgs[3]);
-    }
-
+    
     // get the fault information
     RETONFAILED(hr, control->GetLastEventInformation(&type, &procID, &threadID,
         &extraInfo, sizeof(extraInfo), &extraInfoUsed, description,
