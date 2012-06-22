@@ -12,6 +12,7 @@
 #include <boost/program_options.hpp>
 #include <boost/filesystem.hpp>
 
+
 #include <windows.h>
 
 #define INITGUID
@@ -186,9 +187,7 @@ HRESULT Analyze(const std::string crashdmp, const po::variables_map &vm, diction
     }
 
     // open the crash dump
-    if( vm.count("crash_dmp") ) {
-        RETONFAILED(hr, client->OpenDumpFile(crashdmp.c_str()));
-    }
+    RETONFAILED(hr, client->OpenDumpFile(crashdmp.c_str()));
 
     // wait for the engine to finish processing
     RETONFAILED(hr, control->WaitForEvent(DEBUG_WAIT_DEFAULT, INFINITE));
@@ -202,11 +201,12 @@ int ProcessCommandLine( int argc, _TCHAR **argv, po::variables_map &vm )
 {
     po::options_description desc("Allowed options");
     desc.add_options()
-        ("help"            , "produce help message")
-        ("crash_dmp,z"     , po::value<std::vector<std::string>>() , "crash dmp file")
-        ("symbol_path,y"   , po::value<std::string>() , "symbol path")
-        ("image_path"      , po::value<std::string>() , "image path")
-        ;
+        ("help"                   , "produce help message")
+        ("crash_dmp,z"            , po::value<std::vector<std::string>>() , "crash dmp file")
+        ("symbol_path,y"          , po::value<std::string>() , "symbol path")
+        ("image_path"             , po::value<std::string>() , "image path")
+        ("crash_dmp_scan_dir"     , po::value<std::vector<std::string>>() , "scan directory")
+    ;
 
     po::positional_options_description p;
     p.add("crash_dmp", -1);
@@ -227,6 +227,40 @@ int ProcessCommandLine( int argc, _TCHAR **argv, po::variables_map &vm )
     return 0;
 }
 
+void FindCrashDmpFiles( std::vector<std::string> scan_dirs, std::vector<std::string> &crashdmps )
+{
+    while( scan_dirs.size() ) {
+        std::string scan_dir = scan_dirs.front();
+        scan_dirs.erase(scan_dirs.begin());
+        //const boost::regex my_filter( "somefiles.*\.txt" );
+
+
+        boost::filesystem::directory_iterator end_itr; // Default ctor yields past-the-end
+        for( boost::filesystem::directory_iterator i( scan_dir ); i != end_itr; ++i )
+        {
+            std::string pathname = i->path().string();
+
+            if( boost::filesystem::is_directory( i->status() ) ) {
+                scan_dirs.push_back(i->path().string());
+            }
+
+            // Skip if not a file
+            if( !boost::filesystem::is_regular_file( i->status() ) ) continue;
+
+            //boost::smatch what;
+
+            // Skip if no match
+            //if( !boost::regex_match( i->leaf(), what, my_filter ) ) continue;
+            if( i->path().extension() != ".dmp" ) 
+                continue;
+
+            // File matches, store it
+            crashdmps.push_back( i->path().string() );
+        }
+    }
+}
+
+
 int _tmain(int argc, _TCHAR* argv[])
 {
     po::variables_map vm;
@@ -236,13 +270,23 @@ int _tmain(int argc, _TCHAR* argv[])
         return iRet;
     }
 
-    if( !vm.count("crash_dmp") ) {
+    if( !vm.count("crash_dmp") && !vm.count("crash_dmp_scan_dir") ) {
         std::cout << "Invalid arguments for crash_dmp option" << std::endl;
         return -1;
     }
 
-    const std::vector<std::string> &crashdmps = vm["crash_dmp"].as<std::vector<std::string>>();
+    std::vector<std::string> crashdmps;
+    
+    if( vm.count("crash_dmp") ) {
+        crashdmps = vm["crash_dmp"].as<std::vector<std::string>>();
+    } else {
+        if( vm.count("crash_dmp_scan_dir") ) {
+            std::vector<std::string> scan_dirs = vm["crash_dmp_scan_dir"].as<std::vector<std::string>>();
 
+            FindCrashDmpFiles(scan_dirs, crashdmps);
+
+        }
+    }
     CComInit ci;
 
     HRESULT hr = E_FAIL;
@@ -255,6 +299,9 @@ int _tmain(int argc, _TCHAR* argv[])
         dictionary info;
 
         const std::string &crashdmp = crashdmps[i];
+
+        std::cerr << "Processing " << (i + 1) << "/" << n << ": " << crashdmp << "." << std::endl;
+
 
         info.push_back(std::make_pair("file", crashdmp));
 
@@ -273,6 +320,7 @@ int _tmain(int argc, _TCHAR* argv[])
 
     return hr;
 }
+
 
 
 
