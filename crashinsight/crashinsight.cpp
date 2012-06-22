@@ -3,6 +3,15 @@
 
 #include "stdafx.h"
 
+#include <vector>
+#include <map>
+#include <string>
+#include <algorithm>
+#include <iostream>
+
+#include <boost/program_options.hpp>
+#include <boost/filesystem.hpp>
+
 #include <windows.h>
 
 #define INITGUID
@@ -32,6 +41,9 @@ public:
         CoUninitialize();
     }
 };
+
+
+typedef std::vector<std::pair<std::string, std::string>> dictionary;
 
 
 // http://blogs.msdn.com/b/joshpoley/archive/2008/05/27/opening-a-crash-dump-file-automating-crash-dump-analysis-part-1.aspx
@@ -87,7 +99,7 @@ HRESULT DumpBugCheck(IDebugControl *control, IDebugSymbols *symbols)
     return hr;
 }
 
-HRESULT DumpEvent(IDebugControl *control, IDebugSymbols *symbols)
+HRESULT DumpEvent(dictionary &info, IDebugControl *control, IDebugSymbols *symbols)
 {
     union ExtraInfo
     {
@@ -110,7 +122,7 @@ HRESULT DumpEvent(IDebugControl *control, IDebugSymbols *symbols)
         &extraInfo, sizeof(extraInfo), &extraInfoUsed, description,
         ARRAYSIZE(description)-1, NULL));
 
-    printf("  Description:       %s\n", description);
+    info.push_back(std::make_pair("description", description));
 
     // if we hit an exception, and we understand the type of exception, write
     // out some additional information
@@ -118,38 +130,42 @@ HRESULT DumpEvent(IDebugControl *control, IDebugSymbols *symbols)
         (extraInfoUsed >= sizeof(extraInfo.exceptionInfo)))
     {
         EXCEPTION_RECORD64 *er = &extraInfo.exceptionInfo.ExceptionRecord;
-        printf("  Type:              %s\n", GetExceptionName(er->ExceptionCode));
+        char const * const exceptionName = GetExceptionName(er->ExceptionCode);
+        info.push_back(std::make_pair("type", nullptr == exceptionName ? "" : exceptionName));
+
+        char buf[1024];
+        sprintf(buf, "0x%08X\n", er->ExceptionAddress);
+        info.push_back(std::make_pair("address", buf));
 
         if(er->ExceptionCode == EXCEPTION_ACCESS_VIOLATION ||
             er->ExceptionCode == EXCEPTION_IN_PAGE_ERROR)
         {
+            char buf[1024];
+
             if(er->ExceptionInformation[0] == 0)
-                printf("    Read at:         0x%08X\n", er->ExceptionInformation[1]);
+                sprintf(buf, "Read at:         0x%08X\n", er->ExceptionInformation[1]);
             else if(er->ExceptionInformation[0] == 1)
-                printf("    Write at:        0x%08X\n", er->ExceptionInformation[1]);
+                sprintf(buf, "Write at:        0x%08X\n", er->ExceptionInformation[1]);
             else if(er->ExceptionInformation[0] == 8)
-                printf("    User Mode Fault: 0x%08X\n", er->ExceptionInformation[1]);
+                sprintf(buf, "User Mode Fault: 0x%08X\n", er->ExceptionInformation[1]);
+
+            info.push_back(std::make_pair("action", buf));
         }
     }
 
     return hr;
 }
 
-int _tmain(int argc, _TCHAR* argv[])
-{
-    char *symbolPath = "c:\\myApp\\release";
-    char *imagePath = "c:\\myApp\\release";
-    char *crashPath = argv[1];
+namespace po = boost::program_options;
 
-    HRESULT hr = E_FAIL;
+
+HRESULT Analyze(const std::string crashdmp, const po::variables_map &vm, dictionary &info )
+{
+    HRESULT hr = S_OK;
+
     CComPtr<IDebugClient> client;
     CComPtr<IDebugControl> control;
     CComPtr<IDebugSymbols> symbols;
-
-    CComInit ci;
-
-    // Initialize COM
-    RETONFAILED(hr, ci.Init());
 
     // Create the base IDebugClient object
     RETONFAILED(hr, DebugCreate(IID_IDebugClient, (LPVOID*)&client));
@@ -160,19 +176,104 @@ int _tmain(int argc, _TCHAR* argv[])
     RETONFAILED(hr, client.QueryInterface(&symbols));
 
     // we can supplement the _NT_SYMBOL_PATH environment variable by adding a path here
-    RETONFAILED(hr, symbols->SetSymbolPath(symbolPath));
-
+    if( vm.count("symbol_path") ) {
+        RETONFAILED(hr, symbols->SetSymbolPath(vm["symbol_path"].as<std::string>().c_str()));
+    }
     // the debugger will need to look at the actual binaries
     // so provide the path to the executable files
-    RETONFAILED(hr, symbols->SetImagePath(imagePath));
+    if( vm.count("image_path") ) {
+        RETONFAILED(hr, symbols->SetImagePath(vm["image_path"].as<std::string>().c_str()));
+    }
 
     // open the crash dump
-    RETONFAILED(hr, client->OpenDumpFile(crashPath));
+    if( vm.count("crash_dmp") ) {
+        RETONFAILED(hr, client->OpenDumpFile(crashdmp.c_str()));
+    }
 
     // wait for the engine to finish processing
     RETONFAILED(hr, control->WaitForEvent(DEBUG_WAIT_DEFAULT, INFINITE));
 
-    RETONFAILED(hr, DumpEvent(control, symbols));
+    RETONFAILED(hr, DumpEvent(info, control, symbols));
 
     return hr;
 }
+
+int ProcessCommandLine( int argc, _TCHAR **argv, po::variables_map &vm )
+{
+    po::options_description desc("Allowed options");
+    desc.add_options()
+        ("help"            , "produce help message")
+        ("crash_dmp,z"     , po::value<std::vector<std::string>>() , "crash dmp file")
+        ("symbol_path,y"   , po::value<std::string>() , "symbol path")
+        ("image_path"      , po::value<std::string>() , "image path")
+        ;
+
+    po::positional_options_description p;
+    p.add("crash_dmp", -1);
+
+    try {
+        po::store(po::command_line_parser(argc, argv). options(desc).positional(p).run(), vm);
+        po::notify(vm);    
+    } catch ( const boost::program_options::error& e ) {
+        std::cerr << "Invalid command line parameters:" << std::endl << e.what() << std::endl;
+        return -1;
+    }
+
+    if (vm.count("help")) {
+        std::cout << desc << "\n";
+        return 0;
+    }
+
+    return 0;
+}
+
+int _tmain(int argc, _TCHAR* argv[])
+{
+    po::variables_map vm;
+    int iRet = ProcessCommandLine(argc, argv, vm);
+
+    if( 0 != iRet ) {
+        return iRet;
+    }
+
+    if( !vm.count("crash_dmp") ) {
+        std::cout << "Invalid arguments for crash_dmp option" << std::endl;
+        return -1;
+    }
+
+    const std::vector<std::string> &crashdmps = vm["crash_dmp"].as<std::vector<std::string>>();
+
+    CComInit ci;
+
+    HRESULT hr = E_FAIL;
+    // Initialize COM
+    RETONFAILED(hr, ci.Init());
+    
+    std::cout << "<crashdmps>" << std::endl;
+
+    for( size_t i = 0, n = crashdmps.size(); i < n; i++) {
+        dictionary info;
+
+        const std::string &crashdmp = crashdmps[i];
+
+        info.push_back(std::make_pair("file", crashdmp));
+
+        Analyze(crashdmp, vm, info);
+
+        std::cout << "<crashdmp ";
+        std::for_each(info.begin(), info.end(), [](std::pair<std::string, std::string> & p){
+            std::cout << p.first << "=\"" << p.second << "\" ";
+        });
+        std::cout << "/>";
+        std::cout << std::endl;
+    }
+    std::cout << "</crashdmps>" << std::endl;
+
+
+
+    return hr;
+}
+
+
+
+
