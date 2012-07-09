@@ -135,7 +135,7 @@ HRESULT DumpEvent(dictionary &info, IDebugControl *control, IDebugSymbols *symbo
         info.push_back(std::make_pair("type", nullptr == exceptionName ? "" : exceptionName));
 
         char buf[1024];
-        sprintf(buf, "0x%08X\n", er->ExceptionAddress);
+        sprintf(buf, "0x%08X", er->ExceptionAddress);
         info.push_back(std::make_pair("address", buf));
 
         if(er->ExceptionCode == EXCEPTION_ACCESS_VIOLATION ||
@@ -144,11 +144,11 @@ HRESULT DumpEvent(dictionary &info, IDebugControl *control, IDebugSymbols *symbo
             char buf[1024];
 
             if(er->ExceptionInformation[0] == 0)
-                sprintf(buf, "Read at:         0x%08X\n", er->ExceptionInformation[1]);
+                sprintf(buf, "Read at:         0x%08X", er->ExceptionInformation[1]);
             else if(er->ExceptionInformation[0] == 1)
-                sprintf(buf, "Write at:        0x%08X\n", er->ExceptionInformation[1]);
+                sprintf(buf, "Write at:        0x%08X", er->ExceptionInformation[1]);
             else if(er->ExceptionInformation[0] == 8)
-                sprintf(buf, "User Mode Fault: 0x%08X\n", er->ExceptionInformation[1]);
+                sprintf(buf, "User Mode Fault: 0x%08X", er->ExceptionInformation[1]);
 
             info.push_back(std::make_pair("action", buf));
         }
@@ -220,7 +220,7 @@ int ProcessCommandLine( int argc, _TCHAR **argv, po::variables_map &vm )
     }
 
     if (vm.count("help")) {
-        std::cout << desc << "\n";
+        std::cout << desc << std::endl;
         return 0;
     }
 
