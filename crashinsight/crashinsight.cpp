@@ -8,6 +8,7 @@
 #include <string>
 #include <algorithm>
 #include <iostream>
+#include <iomanip>
 
 #include <boost/program_options.hpp>
 #include <boost/filesystem.hpp>
@@ -100,6 +101,38 @@ HRESULT DumpBugCheck(IDebugControl *control, IDebugSymbols *symbols)
     return hr;
 }
 
+std::string to_hex_string( DWORD64 ExceptionCode ) 
+{
+    std::stringstream ss;
+
+    ss << "0x" << std::setw(8) << std::setfill('0') << std::hex << ExceptionCode;
+
+    return ss.str();
+}
+
+
+std::string& xml_encode(std::string& data) {
+    std::string buffer;
+    buffer.reserve(data.size());
+    for(size_t pos = 0; pos != data.size(); ++pos) {
+        switch(data[pos]) {
+        case '&':  buffer.append("&amp;");       break;
+        case '\"': buffer.append("&quot;");      break;
+        case '\'': buffer.append("&apos;");      break;
+        case '<':  buffer.append("&lt;");        break;
+        case '>':  buffer.append("&gt;");        break;
+        default:   
+            {
+                char c = data[pos];
+                buffer.append(&c, 1);
+            }break;
+        }
+    }
+    data.swap(buffer);
+
+    return data;
+}
+
 HRESULT DumpEvent(dictionary &info, IDebugControl *control, IDebugSymbols *symbols)
 {
     union ExtraInfo
@@ -127,30 +160,30 @@ HRESULT DumpEvent(dictionary &info, IDebugControl *control, IDebugSymbols *symbo
 
     // if we hit an exception, and we understand the type of exception, write
     // out some additional information
-    if((type == DEBUG_EVENT_EXCEPTION) &&
-        (extraInfoUsed >= sizeof(extraInfo.exceptionInfo)))
+    if((type == DEBUG_EVENT_EXCEPTION) && (extraInfoUsed >= sizeof(extraInfo.exceptionInfo)))
     {
-        EXCEPTION_RECORD64 *er = &extraInfo.exceptionInfo.ExceptionRecord;
-        char const * const exceptionName = GetExceptionName(er->ExceptionCode);
-        info.push_back(std::make_pair("type", nullptr == exceptionName ? "" : exceptionName));
+        const EXCEPTION_RECORD64 *er = &extraInfo.exceptionInfo.ExceptionRecord;
 
-        char buf[1024];
-        sprintf(buf, "0x%08X", er->ExceptionAddress);
-        info.push_back(std::make_pair("address", buf));
+        info.push_back(std::make_pair("code", to_hex_string( er->ExceptionCode ) ));
+
+        char const * const exceptionName = GetExceptionName(er->ExceptionCode);
+        info.push_back(std::make_pair("exception_name", nullptr == exceptionName ? "" : exceptionName));
+
+        info.push_back(std::make_pair("address", to_hex_string(er->ExceptionAddress)));
 
         if(er->ExceptionCode == EXCEPTION_ACCESS_VIOLATION ||
             er->ExceptionCode == EXCEPTION_IN_PAGE_ERROR)
         {
-            char buf[1024];
-
-            if(er->ExceptionInformation[0] == 0)
-                sprintf(buf, "Read at:         0x%08X", er->ExceptionInformation[1]);
-            else if(er->ExceptionInformation[0] == 1)
-                sprintf(buf, "Write at:        0x%08X", er->ExceptionInformation[1]);
-            else if(er->ExceptionInformation[0] == 8)
-                sprintf(buf, "User Mode Fault: 0x%08X", er->ExceptionInformation[1]);
-
-            info.push_back(std::make_pair("action", buf));
+            if(er->ExceptionInformation[0] == 0) {
+                info.push_back(std::make_pair("action", "read"));
+                info.push_back(std::make_pair("dest", to_hex_string(er->ExceptionInformation[1])));
+            } else if(er->ExceptionInformation[0] == 1) {
+                info.push_back(std::make_pair("action", "write"));
+                info.push_back(std::make_pair("dest", to_hex_string(er->ExceptionInformation[1])));
+            } else if(er->ExceptionInformation[0] == 8) {
+                info.push_back(std::make_pair("action", "user mode fault"));
+                info.push_back(std::make_pair("dest", to_hex_string(er->ExceptionInformation[1])));
+            }
         }
     }
 
@@ -160,7 +193,7 @@ HRESULT DumpEvent(dictionary &info, IDebugControl *control, IDebugSymbols *symbo
 namespace po = boost::program_options;
 
 
-HRESULT Analyze(const std::string crashdmp, const po::variables_map &vm, dictionary &info )
+HRESULT analyze(const std::string &crashdmp, const po::variables_map &vm, dictionary &info )
 {
     HRESULT hr = S_OK;
 
@@ -197,7 +230,7 @@ HRESULT Analyze(const std::string crashdmp, const po::variables_map &vm, diction
     return hr;
 }
 
-int ProcessCommandLine( int argc, _TCHAR **argv, po::variables_map &vm )
+int process_command_line( int argc, _TCHAR **argv, po::variables_map &vm )
 {
     po::options_description desc("Allowed options");
     desc.add_options()
@@ -227,7 +260,7 @@ int ProcessCommandLine( int argc, _TCHAR **argv, po::variables_map &vm )
     return 0;
 }
 
-void FindCrashDmpFiles( std::vector<std::string> scan_dirs, std::vector<std::string> &crashdmps )
+void find_dmp_files( std::vector<std::string> scan_dirs, std::vector<std::string> &crashdmps )
 {
     while( scan_dirs.size() ) {
         std::string scan_dir = scan_dirs.front();
@@ -264,7 +297,7 @@ void FindCrashDmpFiles( std::vector<std::string> scan_dirs, std::vector<std::str
 int _tmain(int argc, _TCHAR* argv[])
 {
     po::variables_map vm;
-    int iRet = ProcessCommandLine(argc, argv, vm);
+    int iRet = process_command_line(argc, argv, vm);
 
     if( 0 != iRet ) {
         return iRet;
@@ -275,18 +308,18 @@ int _tmain(int argc, _TCHAR* argv[])
         return -1;
     }
 
-    std::vector<std::string> crashdmps;
+    std::vector<std::string> crash_dmp_paths;
     
     if( vm.count("crash_dmp") ) {
-        crashdmps = vm["crash_dmp"].as<std::vector<std::string>>();
+        crash_dmp_paths = vm["crash_dmp"].as<std::vector<std::string>>();
     } else {
         if( vm.count("crash_dmp_scan_dir") ) {
             std::vector<std::string> scan_dirs = vm["crash_dmp_scan_dir"].as<std::vector<std::string>>();
 
-            FindCrashDmpFiles(scan_dirs, crashdmps);
-
+            find_dmp_files(scan_dirs, crash_dmp_paths);
         }
     }
+
     CComInit ci;
 
     HRESULT hr = E_FAIL;
@@ -295,28 +328,25 @@ int _tmain(int argc, _TCHAR* argv[])
     
     std::cout << "<crashdmps>" << std::endl;
 
-    for( size_t i = 0, n = crashdmps.size(); i < n; i++) {
+    for( size_t i = 0, n = crash_dmp_paths.size(); i < n; i++ ) {
         dictionary info;
 
-        const std::string &crashdmp = crashdmps[i];
+        const std::string &crashdmp = crash_dmp_paths[i];
 
         std::cerr << "Processing " << (i + 1) << "/" << n << ": " << crashdmp << "." << std::endl;
 
-
         info.push_back(std::make_pair("file", crashdmp));
 
-        Analyze(crashdmp, vm, info);
+        analyze(crashdmp, vm, info);
 
         std::cout << "<crashdmp ";
         std::for_each(info.begin(), info.end(), [](std::pair<std::string, std::string> & p){
-            std::cout << p.first << "=\"" << p.second << "\" ";
+            std::cout << p.first << "=\"" << xml_encode(p.second) << "\" ";
         });
         std::cout << "/>";
         std::cout << std::endl;
     }
     std::cout << "</crashdmps>" << std::endl;
-
-
 
     return hr;
 }
