@@ -24,7 +24,7 @@
 
 #include <atlbase.h>
 
-#define RETONFAILED(x, __VARARGS__) if(FAILED(x = __VARARGS__)) return x;
+#define RETONFAILED(x, __VARARGS__) if(FAILED(x = __VARARGS__)){ std::cerr << __FILE__ << "(" << __LINE__ << "): " << x << std::endl; return x; }
 
 class CComInit
 {
@@ -195,7 +195,11 @@ namespace po = boost::program_options;
 
 HRESULT analyze(const std::string &crashdmp, const po::variables_map &vm, dictionary &info )
 {
-    HRESULT hr = S_OK;
+    CComInit ci;
+
+    HRESULT hr = E_FAIL;
+    // Initialize COM
+    RETONFAILED(hr, ci.Init());
 
     CComPtr<IDebugClient> client;
     CComPtr<IDebugControl> control;
@@ -296,6 +300,8 @@ void find_dmp_files( std::vector<std::string> scan_dirs, std::vector<std::string
 
 int _tmain(int argc, _TCHAR* argv[])
 {
+    HRESULT hr = S_OK;
+
     po::variables_map vm;
     int iRet = process_command_line(argc, argv, vm);
 
@@ -320,11 +326,6 @@ int _tmain(int argc, _TCHAR* argv[])
         }
     }
 
-    CComInit ci;
-
-    HRESULT hr = E_FAIL;
-    // Initialize COM
-    RETONFAILED(hr, ci.Init());
     
     std::cout << "<crashdmps>" << std::endl;
 
