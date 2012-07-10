@@ -9,9 +9,11 @@
     <ClCompile>
       <AdditionalIncludeDirectories>$(BoostDir)</AdditionalIncludeDirectories>
     </ClCompile>
-    <Link />
-    <Link>
+    <Link Condition="'$(Platform)'=='Win32'" >
       <AdditionalLibraryDirectories>$(BoostDir)lib</AdditionalLibraryDirectories>
+    </Link>
+    <Link Condition="'$(Platform)'=='x64'" >
+      <AdditionalLibraryDirectories>$(BoostDir)lib64</AdditionalLibraryDirectories>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
