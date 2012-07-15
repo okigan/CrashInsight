@@ -13,6 +13,7 @@
 
 #include <boost/program_options.hpp>
 #include <boost/filesystem.hpp>
+#include <boost/regex.hpp>
 
 
 #include <windows.h>
@@ -250,6 +251,39 @@ HRESULT DumpEvent(dictionary &info, IDebugControl *control, IDebugClient *client
 
     }
 
+    {
+        CComPtr<IDebugDataSpaces> data;
+        RETONFAILED(hr, client->QueryInterface(IID_IDebugDataSpaces, (LPVOID*)&data.p));
+
+        USHORT SizeEProcess = 0;
+        RETONFAILED(hr, data->ReadDebuggerData(DEBUG_DATA_SizeEProcess, &SizeEProcess, sizeof(SizeEProcess), NULL));
+
+        USHORT OffsetEprocessPeb = 0;
+        RETONFAILED(hr, data->ReadDebuggerData(DEBUG_DATA_OffsetEprocessPeb, &OffsetEprocessPeb, sizeof(OffsetEprocessPeb), NULL));
+    }
+
+    {
+        CComPtr<IDebugRegisters> registers;
+        RETONFAILED(hr, client->QueryInterface(IID_IDebugRegisters, (LPVOID*)&registers.p));
+
+        ULONG Number = 0;
+        RETONFAILED(hr, registers->GetNumberRegisters(&Number));
+
+        ULONG index = 0;
+        RETONFAILED(hr, registers->GetIndexByName("$peb", &index));
+
+        for(ULONG i = 0; i < Number; i++) {
+            CHAR name[256] = {0};
+
+            DEBUG_REGISTER_DESCRIPTION desc = {0};
+            ULONG nameSize = 0;
+            RETONFAILED(hr, registers->GetDescription(i, name, ARRAYSIZE(name), &nameSize, &desc));
+
+            int a = 0;
+        }
+
+    }
+
     return hr;
 }
 
@@ -399,6 +433,7 @@ int process_command_line( int argc, _TCHAR **argv, po::variables_map &vm )
         ("symbol_path,y"          , po::value<std::string>() , "symbol path")
         ("image_path"             , po::value<std::string>() , "image path")
         ("crash_dmp_scan_dir"     , po::value<std::vector<std::string>>() , "scan directory")
+        ("path_regex"             , po::value<std::vector<std::string>>() , "path regex")
     ;
 
     po::positional_options_description p;
@@ -454,6 +489,42 @@ void find_dmp_files( std::vector<std::string> scan_dirs, std::vector<std::string
 }
 
 
+void path_regex_extract( const std::string & crashdmp, const po::variables_map & vm, dictionary & info ) 
+{
+    if( !vm.count("path_regex") )
+        return;
+
+    auto res = vm["path_regex"].as<std::vector<std::string>>();
+
+    for(auto it = res.begin(), ite = res.end(); it != ite; ++it ) {
+
+        std::string sre = *it;
+        boost::regex re;
+        boost::cmatch matches;
+
+        try {
+            // Set up the regular expression for case-insensitivity
+            re.assign(sre, boost::regex_constants::icase);
+        } catch (boost::regex_error& e) {
+            std::cout << sre << " is not a valid regular expression: \""
+                << e.what() << "\"" << std::endl;
+            continue;
+        } if (boost::regex_match(crashdmp.c_str(), matches, re)) {
+            // matches[0] contains the original string.  matches[n]
+            // contains a sub_match object for each matching
+            // subexpression
+            for (size_t i = 1; i < matches.size(); i++) {
+                // sub_match::first and sub_match::second are iterators that
+                // refer to the first and one past the last chars of the
+                // matching subexpression
+                std::string match(matches[i].first, matches[i].second);
+                info.push_back(std::make_pair(boost::lexical_cast<std::string>(i), match));
+            }
+        }
+    }
+    
+}
+
 int _tmain(int argc, _TCHAR* argv[])
 {
     HRESULT hr = S_OK;
@@ -495,6 +566,8 @@ int _tmain(int argc, _TCHAR* argv[])
         info.push_back(std::make_pair("file", crashdmp));
 
         analyze(crashdmp, vm, info);
+
+        path_regex_extract(crashdmp, vm, info);
 
         std::cout << "<crashdmp ";
         std::for_each(info.begin(), info.end(), [](std::pair<std::string, std::string> & p){
