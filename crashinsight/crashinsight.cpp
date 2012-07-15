@@ -17,10 +17,12 @@
 
 
 #include <windows.h>
+#include <winternl.h>
 
 #define INITGUID
 #include <Guiddef.h>
-#include "dbgeng.h"
+#include <dbgeng.h>
+
 
 #pragma comment(lib, "dbgeng.lib")
 
@@ -189,6 +191,25 @@ HRESULT PrintStackEx(IDebugSymbols *symbols, IDebugClient *client, IDebugControl
     return hr;
 }
 
+void MyMethod( WCHAR * buff )
+{
+    WCHAR * p = buff;
+
+    while( *p != L'\0' ) {
+        WCHAR * pe = wcsstr(p, L"=");
+
+
+        std::wstring a(p, pe);
+
+        pe += 1;
+
+        WCHAR * pee = pe + wcslen(pe);
+        std::wstring b(pe, pee );
+
+        p = pee + 1;
+    }
+}
+
 
 HRESULT DumpEvent(dictionary &info, IDebugControl *control, IDebugClient *client, IDebugSymbols *symbols)
 {
@@ -207,7 +228,7 @@ HRESULT DumpEvent(dictionary &info, IDebugControl *control, IDebugClient *client
     ULONG extraInfoUsed  = 0;
     char description[80] = {0};
 
-    
+
     // get the fault information
     RETONFAILED(hr, control->GetLastEventInformation(&type, &procID, &threadID,
         &extraInfo, sizeof(extraInfo), &extraInfoUsed, description,
@@ -252,25 +273,11 @@ HRESULT DumpEvent(dictionary &info, IDebugControl *control, IDebugClient *client
     }
 
     {
-        CComPtr<IDebugDataSpaces> data;
-        RETONFAILED(hr, client->QueryInterface(IID_IDebugDataSpaces, (LPVOID*)&data.p));
-
-        USHORT SizeEProcess = 0;
-        RETONFAILED(hr, data->ReadDebuggerData(DEBUG_DATA_SizeEProcess, &SizeEProcess, sizeof(SizeEProcess), NULL));
-
-        USHORT OffsetEprocessPeb = 0;
-        RETONFAILED(hr, data->ReadDebuggerData(DEBUG_DATA_OffsetEprocessPeb, &OffsetEprocessPeb, sizeof(OffsetEprocessPeb), NULL));
-    }
-
-    {
-        CComPtr<IDebugRegisters> registers;
-        RETONFAILED(hr, client->QueryInterface(IID_IDebugRegisters, (LPVOID*)&registers.p));
+        CComPtr<IDebugRegisters2> registers;
+        RETONFAILED(hr, client->QueryInterface(IID_IDebugRegisters2, (LPVOID*)&registers.p));
 
         ULONG Number = 0;
         RETONFAILED(hr, registers->GetNumberRegisters(&Number));
-
-        ULONG index = 0;
-        RETONFAILED(hr, registers->GetIndexByName("$peb", &index));
 
         for(ULONG i = 0; i < Number; i++) {
             CHAR name[256] = {0};
@@ -282,6 +289,78 @@ HRESULT DumpEvent(dictionary &info, IDebugControl *control, IDebugClient *client
             int a = 0;
         }
 
+        RETONFAILED(hr, registers->GetNumberPseudoRegisters(&Number));
+
+        for(ULONG i = 0; i < Number; i++) {
+            CHAR name[256] = {0};
+
+            DEBUG_REGISTER_DESCRIPTION desc = {0};
+            ULONG nameSize = 0;
+            hr = registers->GetPseudoDescription (i, name, ARRAYSIZE(name), &nameSize, NULL, NULL);
+
+            int a = 0;
+        }
+
+        ULONG index = 0;
+        RETONFAILED(hr, registers->GetPseudoIndexByName("$peb", &index));
+
+        DEBUG_VALUE value = {0};
+        RETONFAILED(hr, registers->GetValue(index, &value));
+
+        RETONFAILED(hr, registers->GetPseudoValues(DEBUG_REGSRC_DEBUGGEE, 1, &index, 0, &value));
+
+
+        {
+            CComPtr<IDebugDataSpaces> data;
+            RETONFAILED(hr, client->QueryInterface(IID_IDebugDataSpaces, (LPVOID*)&data.p));
+
+            USHORT SizeEProcess = 0;
+            RETONFAILED(hr, data->ReadDebuggerData(DEBUG_DATA_SizeEProcess, &SizeEProcess, sizeof(SizeEProcess), NULL));
+
+            USHORT OffsetEprocessPeb = 0;
+            RETONFAILED(hr, data->ReadDebuggerData(DEBUG_DATA_OffsetEprocessPeb, &OffsetEprocessPeb, sizeof(OffsetEprocessPeb), NULL));
+
+            PEB peb = {0};
+            ULONG read = 0;
+
+            RETONFAILED(hr, data->ReadVirtual(value.I64, &peb, sizeof(peb), &read));
+
+            char buf_rtl[4*1024] = {0};
+
+            RETONFAILED(hr, data->ReadVirtual((ULONG64)peb.ProcessParameters, &buf_rtl, sizeof(buf_rtl), &read));
+
+            RTL_USER_PROCESS_PARAMETERS& parameters = (RTL_USER_PROCESS_PARAMETERS&)buf_rtl;
+
+            WCHAR buf[1024] = {0};
+
+            RETONFAILED(hr, data->ReadVirtual((ULONG64)parameters.ImagePathName.Buffer, buf, sizeof(buf), &read));
+
+            void* p = *(void**)(((char*)&parameters) + 0x80);
+
+            WCHAR term[] = L"\0\0";
+
+            ULONG64 offset = 0;
+
+            hr = data->SearchVirtual((ULONG64)p, 10*1024, term, sizeof(term), 1, &offset);
+
+            WCHAR buff[10*1024] = {0};
+            hr = data->ReadVirtual((ULONG64)p, buff, offset - (ULONG64)p, &read);
+
+            MyMethod(&buff[0]);
+
+
+
+
+            for(int j = 0, n = ARRAYSIZE(parameters.Reserved2); j < n; j++) {
+
+                char buff[1024] = {0};
+                hr = data->ReadVirtual((ULONG64)parameters.Reserved2[j], buff, sizeof(buff), &read);
+
+                int a = 0;
+            }
+
+
+        }
     }
 
     return hr;
@@ -326,98 +405,98 @@ HRESULT analyze(const std::string &crashdmp, const po::variables_map &vm, dictio
     // wait for the engine to finish processing
     RETONFAILED(hr, control->WaitForEvent(DEBUG_WAIT_DEFAULT, INFINITE));
 
-   // RETONFAILED(hr, PrintStackEx(symbols, client, control));
+    // RETONFAILED(hr, PrintStackEx(symbols, client, control));
 
-   // const int MAX_STACK_FRAMES = 50;
-   //// std::unique_ptr<DEBUG_STACK_FRAME[]> debug_stack_frames(new DEBUG_STACK_FRAME[]);
-   // DEBUG_STACK_FRAME debug_stack_frames[MAX_STACK_FRAMES] = {0};
+    // const int MAX_STACK_FRAMES = 50;
+    //// std::unique_ptr<DEBUG_STACK_FRAME[]> debug_stack_frames(new DEBUG_STACK_FRAME[]);
+    // DEBUG_STACK_FRAME debug_stack_frames[MAX_STACK_FRAMES] = {0};
 
-   // ULONG frames = 0;
+    // ULONG frames = 0;
 
-   // RETONFAILED(hr, control->GetStackTrace(0, 0, 0, debug_stack_frames, MAX_STACK_FRAMES, &frames));
+    // RETONFAILED(hr, control->GetStackTrace(0, 0, 0, debug_stack_frames, MAX_STACK_FRAMES, &frames));
 
-   // DWORD flags = DEBUG_STACK_SOURCE_LINE |
-   //     DEBUG_STACK_FRAME_ADDRESSES |
-   //     DEBUG_STACK_COLUMN_NAMES |
-   //     DEBUG_STACK_FRAME_NUMBERS;
+    // DWORD flags = DEBUG_STACK_SOURCE_LINE |
+    //     DEBUG_STACK_FRAME_ADDRESSES |
+    //     DEBUG_STACK_COLUMN_NAMES |
+    //     DEBUG_STACK_FRAME_NUMBERS;
 
-   // RETONFAILED(hr, control->OutputStackTrace(DEBUG_OUTCTL_ALL_CLIENTS, debug_stack_frames, frames, flags));
+    // RETONFAILED(hr, control->OutputStackTrace(DEBUG_OUTCTL_ALL_CLIENTS, debug_stack_frames, frames, flags));
 
-   // ULONG ProcessorType = 0;
-   // RETONFAILED(hr, control->GetEffectiveProcessorType(&ProcessorType));
+    // ULONG ProcessorType = 0;
+    // RETONFAILED(hr, control->GetEffectiveProcessorType(&ProcessorType));
 
-   // for (ULONG n=0; n<frames; n++) {  
+    // for (ULONG n=0; n<frames; n++) {  
 
-   //     char SymName[4096] = {0};
-   //     ULONG SymSize = 0;
-   //     ULONG64 Displacement = 0;
+    //     char SymName[4096] = {0};
+    //     ULONG SymSize = 0;
+    //     ULONG64 Displacement = 0;
 
-   //     const DEBUG_STACK_FRAME* frame = debug_stack_frames + n;
+    //     const DEBUG_STACK_FRAME* frame = debug_stack_frames + n;
 
-   //     // Use the Effective Processor Type and the contents 
-   //     // of the frame to determine existence
-   //     RETONFAILED(hr,  symbols->GetNameByOffset(frame->InstructionOffset, SymName, 4096,  &SymSize, &Displacement));
-   //     
-   //     if( SymSize > 0 ) {
-   //         switch( ProcessorType ) {
+    //     // Use the Effective Processor Type and the contents 
+    //     // of the frame to determine existence
+    //     RETONFAILED(hr,  symbols->GetNameByOffset(frame->InstructionOffset, SymName, 4096,  &SymSize, &Displacement));
+    //     
+    //     if( SymSize > 0 ) {
+    //         switch( ProcessorType ) {
 
-   //         case IMAGE_FILE_MACHINE_I386:
-   //             {//  && 
-   //                 //(Displacement == 0xF)) {  
-   //                 //    // Win7 x86; KERNELBASE!Sleep+0xF is usually in frame 3.
-   //                 //    IDebugDataSpaces* pDebugDataSpaces;
+    //         case IMAGE_FILE_MACHINE_I386:
+    //             {//  && 
+    //                 //(Displacement == 0xF)) {  
+    //                 //    // Win7 x86; KERNELBASE!Sleep+0xF is usually in frame 3.
+    //                 //    IDebugDataSpaces* pDebugDataSpaces;
 
-   //                 //    if (SUCCEEDED(Client->QueryInterface(
-   //                 //        __uuidof(IDebugDataSpaces), 
-   //                 //        (void **)&pDebugDataSpaces))) {  
-   //                 //            // The value is pushed immediately prior to 
-   //                 //            // KERNELBASE!Sleep+0xF
-   //                 //            DWORD dwMilliseconds = 0;
+    //                 //    if (SUCCEEDED(Client->QueryInterface(
+    //                 //        __uuidof(IDebugDataSpaces), 
+    //                 //        (void **)&pDebugDataSpaces))) {  
+    //                 //            // The value is pushed immediately prior to 
+    //                 //            // KERNELBASE!Sleep+0xF
+    //                 //            DWORD dwMilliseconds = 0;
 
-   //                 //            if (SUCCEEDED(pDebugDataSpaces->ReadVirtual(
-   //                 //                pDebugStackFrame[n].StackOffset, &dwMilliseconds, 
-   //                 //                sizeof(dwMilliseconds), NULL))) {
-   //                 //                    control->Output(DEBUG_OUTPUT_NORMAL, 
-   //                 //                        "Sleeping for %ld msec\n", dwMilliseconds);
-   //                 //                    bFound = TRUE;
-   //                 //            }
-   //                 //            pDebugDataSpaces->Release();
-   //                 //    }
-   //                 //    if (bFound) break;
-   //             }break;
-   //         case  IMAGE_FILE_MACHINE_AMD64:
-   //             {
-   //                 //(_stricmp(SymName, "KERNELBASE!SleepEx") == 0) && 
-   //                 //(Displacement == 0xAB)) {  
-   //                 //    // Win7 x64; KERNELBASE!SleepEx+0xAB is usually in frame 1.
-   //                 //    IDebugRegisters* pDebugRegisters;
+    //                 //            if (SUCCEEDED(pDebugDataSpaces->ReadVirtual(
+    //                 //                pDebugStackFrame[n].StackOffset, &dwMilliseconds, 
+    //                 //                sizeof(dwMilliseconds), NULL))) {
+    //                 //                    control->Output(DEBUG_OUTPUT_NORMAL, 
+    //                 //                        "Sleeping for %ld msec\n", dwMilliseconds);
+    //                 //                    bFound = TRUE;
+    //                 //            }
+    //                 //            pDebugDataSpaces->Release();
+    //                 //    }
+    //                 //    if (bFound) break;
+    //             }break;
+    //         case  IMAGE_FILE_MACHINE_AMD64:
+    //             {
+    //                 //(_stricmp(SymName, "KERNELBASE!SleepEx") == 0) && 
+    //                 //(Displacement == 0xAB)) {  
+    //                 //    // Win7 x64; KERNELBASE!SleepEx+0xAB is usually in frame 1.
+    //                 //    IDebugRegisters* pDebugRegisters;
 
-   //                 //    if (SUCCEEDED(Client->QueryInterface(
-   //                 //        __uuidof(IDebugRegisters), 
-   //                 //        (void **)&pDebugRegisters))) {  
-   //                 //            // The value is in the 'rsi' register.
-   //                 //            ULONG rsiIndex = 0;
-   //                 //            if (SUCCEEDED(pDebugRegisters->GetIndexByName(
-   //                 //                "rsi", &rsiIndex)))
-   //                 //            {
-   //                 //                DEBUG_VALUE debugValue;
-   //                 //                if (SUCCEEDED(pDebugRegisters->GetValue(
-   //                 //                    rsiIndex, &debugValue)) && 
-   //                 //                    (debugValue.Type == DEBUG_VALUE_INT64)) {  
-   //                 //                        // Truncate to 32bits for display.
-   //                 //                        control->Output(DEBUG_OUTPUT_NORMAL, 
-   //                 //                            "Sleeping for %ld msec\n", debugValue.I32);
-   //                 //                        bFound = TRUE;
-   //                 //                }
-   //                 //            }
-   //                 //            pDebugRegisters->Release();
-   //                 //    }
+    //                 //    if (SUCCEEDED(Client->QueryInterface(
+    //                 //        __uuidof(IDebugRegisters), 
+    //                 //        (void **)&pDebugRegisters))) {  
+    //                 //            // The value is in the 'rsi' register.
+    //                 //            ULONG rsiIndex = 0;
+    //                 //            if (SUCCEEDED(pDebugRegisters->GetIndexByName(
+    //                 //                "rsi", &rsiIndex)))
+    //                 //            {
+    //                 //                DEBUG_VALUE debugValue;
+    //                 //                if (SUCCEEDED(pDebugRegisters->GetValue(
+    //                 //                    rsiIndex, &debugValue)) && 
+    //                 //                    (debugValue.Type == DEBUG_VALUE_INT64)) {  
+    //                 //                        // Truncate to 32bits for display.
+    //                 //                        control->Output(DEBUG_OUTPUT_NORMAL, 
+    //                 //                            "Sleeping for %ld msec\n", debugValue.I32);
+    //                 //                        bFound = TRUE;
+    //                 //                }
+    //                 //            }
+    //                 //            pDebugRegisters->Release();
+    //                 //    }
 
-   //                 //    if (bFound) break;
-   //             }break;
-   //         }
-   //     }
-   // }
+    //                 //    if (bFound) break;
+    //             }break;
+    //         }
+    //     }
+    // }
 
     RETONFAILED(hr, DumpEvent(info, control, client, symbols));
 
@@ -434,7 +513,7 @@ int process_command_line( int argc, _TCHAR **argv, po::variables_map &vm )
         ("image_path"             , po::value<std::string>() , "image path")
         ("crash_dmp_scan_dir"     , po::value<std::vector<std::string>>() , "scan directory")
         ("path_regex"             , po::value<std::vector<std::string>>() , "path regex")
-    ;
+        ;
 
     po::positional_options_description p;
     p.add("crash_dmp", -1);
@@ -522,7 +601,7 @@ void path_regex_extract( const std::string & crashdmp, const po::variables_map &
             }
         }
     }
-    
+
 }
 
 int _tmain(int argc, _TCHAR* argv[])
@@ -542,7 +621,7 @@ int _tmain(int argc, _TCHAR* argv[])
     }
 
     std::vector<std::string> crash_dmp_paths;
-    
+
     if( vm.count("crash_dmp") ) {
         crash_dmp_paths = vm["crash_dmp"].as<std::vector<std::string>>();
     } else {
@@ -553,7 +632,7 @@ int _tmain(int argc, _TCHAR* argv[])
         }
     }
 
-    
+
     std::cout << "<crashdmps>" << std::endl;
 
     for( size_t i = 0, n = crash_dmp_paths.size(); i < n; i++ ) {
@@ -580,6 +659,8 @@ int _tmain(int argc, _TCHAR* argv[])
 
     return hr;
 }
+
+
 
 
 
